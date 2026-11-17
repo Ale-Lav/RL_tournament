@@ -127,7 +127,13 @@ def submit_lab(lab_id, files_to_submit, github_token, github_username=None):
         status, result = _github_request(url, method=method, data=data, token=token)
         if status not in expected:
             message = result.get("message", "Unexpected GitHub response") if isinstance(result, dict) else "Unexpected response"
-            raise RuntimeError(f"GitHub {method} failed (HTTP {status}): {message}")
+            hint = ""
+            if status == 404 and method == "POST":
+                hint = (
+                    " (Ensure your GitHub token is a Classic PAT with the 'repo' scope "
+                    "and your fork is synced with upstream.)"
+                )
+            raise RuntimeError(f"GitHub {method} failed (HTTP {status}): {message}{hint}")
         return result
 
     status, user_info = _github_request("https://api.github.com/user", token=token)
@@ -187,6 +193,20 @@ def submit_lab(lab_id, files_to_submit, github_token, github_username=None):
         target_repo = fork_url
     else:
         raise ValueError(f"{username}/{COURSE_REPO} is not a fork of the course repository")
+
+    if not is_upstream:
+        # Ensure the student's fork has upstream/main objects before calling /git/trees with base_tree.
+        sync_status, _ = _github_request(
+            target_repo + "/merge-upstream",
+            method="POST",
+            data={"branch": BASE_BRANCH},
+            token=token,
+        )
+        if sync_status not in (200, 409):
+            raise RuntimeError(
+                f"Could not sync your fork with upstream (HTTP {sync_status}). "
+                "Try clicking 'Sync fork' on your GitHub fork or check your token's 'repo' scope."
+            )
 
     latest_sha = request(upstream_url + f"/git/ref/heads/{BASE_BRANCH}")["object"]["sha"]
     base_tree = request(upstream_url + f"/git/commits/{latest_sha}")["tree"]["sha"]

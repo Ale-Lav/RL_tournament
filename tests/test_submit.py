@@ -19,6 +19,7 @@ class SubmitTests(unittest.TestCase):
         self.login = "Alice"
         self.existing_branch = False
         self.fork_parent = "gramuah/RL_tournament"
+        self.merge_upstream_status = 200
 
     def fake_github(self, url, method="GET", data=None, token=None):
         self.calls.append((url, method, data))
@@ -26,6 +27,8 @@ class SubmitTests(unittest.TestCase):
             return 200, {"login": self.login}
         if url.endswith("/RL_tournament"):
             return 200, {"fork": True, "parent": {"full_name": self.fork_parent}}
+        if url.endswith("/merge-upstream") and method == "POST":
+            return self.merge_upstream_status, {}
         if url.endswith("/git/ref/heads/main"):
             return 200, {"object": {"sha": "upstream-sha"}}
         if url.endswith("/git/commits/upstream-sha"):
@@ -162,6 +165,24 @@ class SubmitTests(unittest.TestCase):
 
         pr_payload = next(d for u, m, d in self.calls if u.endswith("/pulls"))
         self.assertEqual(pr_payload["head"], "submission-lab1-rflor01")
+        self.assertFalse(any(u.endswith("/merge-upstream") for u, _, _ in self.calls))
+
+    def test_fork_is_synced_with_upstream_before_creating_tree(self):
+        with patch.object(submit, "_github_request", self.fake_github):
+            submit.submit_lab(2, self.files, "private-token")
+        sync_idx = next(i for i, (u, m, _) in enumerate(self.calls) if m == "POST" and u.endswith("/merge-upstream"))
+        tree_idx = next(i for i, (u, m, _) in enumerate(self.calls) if m == "POST" and u.endswith("/git/trees"))
+        self.assertLess(sync_idx, tree_idx)
+
+        self.calls.clear()
+        self.merge_upstream_status = 409
+        with patch.object(submit, "_github_request", self.fake_github):
+            submit.submit_lab(2, self.files, "private-token")
+
+        self.calls.clear()
+        self.merge_upstream_status = 404
+        with patch.object(submit, "_github_request", self.fake_github), self.assertRaises(RuntimeError):
+            submit.submit_lab(2, self.files, "private-token")
 
 
 if __name__ == "__main__":
